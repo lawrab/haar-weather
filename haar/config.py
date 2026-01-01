@@ -55,8 +55,8 @@ class OpenMeteoConfig(BaseModel):
 
     enabled: bool = Field(default=True, description="Enable Open-Meteo collector")
     models: List[str] = Field(
-        default=["ecmwf_ifs04", "gfs_seamless", "icon_seamless"],
-        description="NWP models to use",
+        default=["ecmwf", "gfs", "icon"],
+        description="NWP model families to collect (ecmwf, gfs, icon, auto)",
     )
     cache_hours: int = Field(default=1, ge=0, description="Response cache duration")
 

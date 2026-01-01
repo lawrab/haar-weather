@@ -44,7 +44,7 @@ def openmeteo_config():
     """Create test Open-Meteo configuration."""
     return OpenMeteoConfig(
         enabled=True,
-        models=["ecmwf_ifs04"],
+        models=["ecmwf"],
         cache_hours=1,
     )
 
@@ -146,7 +146,7 @@ def test_openmeteo_collector_collect(
     # Verify API was called
     mock_client.get.assert_called_once()
     call_args = mock_client.get.call_args
-    assert call_args[0][0] == OpenMeteoCollector.BASE_URL
+    assert call_args[0][0] == OpenMeteoCollector.ENDPOINTS["ecmwf"]
 
     # Verify forecasts were stored
     assert count == 24  # 24 hourly forecasts
@@ -161,7 +161,7 @@ def test_openmeteo_collector_collect(
         # Check forecasts were stored
         forecasts = session.query(Forecast).all()
         assert len(forecasts) == 24
-        assert forecasts[0].source == "openmeteo_ecmwf_ifs04"
+        assert forecasts[0].source == "openmeteo_ecmwf"
         assert forecasts[0].temperature_c is not None
 
         # Check collection log was created
@@ -181,9 +181,9 @@ def test_openmeteo_collector_multiple_models(
     mock_openmeteo_response,
     test_db_config,
 ):
-    """Test collection from multiple NWP models."""
-    # Configure multiple models
-    config = OpenMeteoConfig(models=["ecmwf_ifs04", "gfs_seamless"])
+    """Test collection from multiple NWP model families."""
+    # Configure multiple model families
+    config = OpenMeteoConfig(models=["ecmwf", "gfs"])
 
     # Setup mock client
     mock_client = Mock()
@@ -196,7 +196,7 @@ def test_openmeteo_collector_multiple_models(
     collector = OpenMeteoCollector(location_config, config)
     count = collector.collect()
 
-    # Verify API was called twice (once per model)
+    # Verify API was called twice (once per model family)
     assert mock_client.get.call_count == 2
 
     # Verify total forecasts (24 per model * 2 models)
@@ -296,7 +296,8 @@ def test_openmeteo_collector_data_parsing(
         # Check metadata
         assert forecast.lead_time_hours >= 0
         assert forecast.raw_data is not None
-        assert forecast.raw_data["model"] == "ecmwf_ifs04"
+        assert forecast.raw_data["model_family"] == "ecmwf"
+        assert forecast.raw_data["endpoint"] == OpenMeteoCollector.ENDPOINTS["ecmwf"]
 
     collector.close()
 

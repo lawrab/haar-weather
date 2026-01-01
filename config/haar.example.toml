@@ -22,7 +22,9 @@ backfill_days = 365  # How many days of historical data to fetch initially
 [sources.openmeteo]
 # Open-Meteo API (no key required)
 enabled = true
-models = ["ecmwf_ifs04", "gfs_seamless", "icon_seamless"]
+# Model families to collect: ecmwf, gfs, icon, or auto
+# Each uses a dedicated API endpoint for reliable data
+models = ["ecmwf", "gfs", "icon"]
 cache_hours = 1  # Cache responses for this many hours
 
 [sources.metoffice]

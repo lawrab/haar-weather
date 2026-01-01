@@ -16,7 +16,13 @@ logger = logging.getLogger(__name__)
 class OpenMeteoCollector(BaseCollector):
     """Collector for Open-Meteo forecast data."""
 
-    BASE_URL = "https://api.open-meteo.com/v1/forecast"
+    # API endpoints for different model families
+    ENDPOINTS = {
+        "ecmwf": "https://api.open-meteo.com/v1/ecmwf",
+        "gfs": "https://api.open-meteo.com/v1/gfs",
+        "icon": "https://api.open-meteo.com/v1/dwd-icon",
+        "auto": "https://api.open-meteo.com/v1/forecast",  # Automatic model selection
+    }
 
     # Weather variables to collect
     HOURLY_VARIABLES = [
@@ -84,44 +90,49 @@ class OpenMeteoCollector(BaseCollector):
             )
             raise
 
-    def _collect_model_forecast(self, model: str) -> int:
-        """Collect forecast from a specific NWP model.
+    def _collect_model_forecast(self, model_family: str) -> int:
+        """Collect forecast from a specific NWP model family.
 
         Args:
-            model: NWP model name (e.g., 'ecmwf_ifs04', 'gfs_seamless')
+            model_family: Model family name (e.g., 'ecmwf', 'gfs', 'icon', 'auto')
 
         Returns:
             Number of records collected
         """
-        self.logger.debug(f"Collecting forecast from {model}")
+        self.logger.debug(f"Collecting forecast from {model_family}")
+
+        # Get the correct endpoint for this model family
+        endpoint = self.ENDPOINTS.get(model_family)
+        if not endpoint:
+            self.logger.warning(f"Unknown model family '{model_family}', skipping")
+            return 0
 
         # Build API request parameters
         params = {
             "latitude": self.location_config.latitude,
             "longitude": self.location_config.longitude,
             "hourly": ",".join(self.HOURLY_VARIABLES),
-            "models": model,
             "timezone": "UTC",
             "forecast_days": 7,  # 7-day forecast
         }
 
         # Make API request
-        response = self.client.get(self.BASE_URL, params=params)
+        response = self.client.get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
 
         # Parse and store forecasts
-        count = self._parse_and_store_forecasts(data, model)
+        count = self._parse_and_store_forecasts(data, model_family)
 
-        self.logger.debug(f"Collected {count} forecasts from {model}")
+        self.logger.debug(f"Collected {count} forecasts from {model_family}")
         return count
 
-    def _parse_and_store_forecasts(self, data: Dict[str, Any], model: str) -> int:
+    def _parse_and_store_forecasts(self, data: Dict[str, Any], model_family: str) -> int:
         """Parse API response and store forecasts in database.
 
         Args:
             data: API response JSON
-            model: NWP model name
+            model_family: NWP model family name (ecmwf, gfs, icon, auto)
 
         Returns:
             Number of records stored
@@ -149,7 +160,7 @@ class OpenMeteoCollector(BaseCollector):
         times = hourly.get("time", [])
 
         if not times:
-            self.logger.warning(f"No forecast data returned for {model}")
+            self.logger.warning(f"No forecast data returned for {model_family}")
             return 0
 
         # Issued time is the current API request time
@@ -168,7 +179,7 @@ class OpenMeteoCollector(BaseCollector):
             # Extract weather variables
             forecast = Forecast(
                 location_id=location_id,
-                source=f"openmeteo_{model}",
+                source=f"openmeteo_{model_family}",
                 issued_at=issued_at,
                 valid_at=valid_at,
                 lead_time_hours=lead_time_hours,
@@ -181,7 +192,8 @@ class OpenMeteoCollector(BaseCollector):
                 cloud_cover_pct=self._get_value(hourly, "cloud_cover", i),
                 weather_code=self._get_int_value(hourly, "weather_code", i),
                 raw_data={
-                    "model": model,
+                    "model_family": model_family,
+                    "endpoint": self.ENDPOINTS.get(model_family),
                     "api_response": {
                         k: v[i] if i < len(v) else None
                         for k, v in hourly.items()
