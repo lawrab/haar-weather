@@ -10,7 +10,8 @@ from rich.table import Table
 
 from haar import __version__
 from haar.config import HaarConfig, get_config
-from haar.logging import setup_logging
+from haar.logging import get_logger, setup_logging
+from haar.storage import get_session, init_db
 
 console = Console()
 
@@ -167,33 +168,69 @@ def db() -> None:
 
 @db.command("init")
 @click.option("--force", is_flag=True, help="Recreate database if it exists")
-def db_init(force: bool) -> None:
+@click.pass_context
+def db_init(ctx: click.Context, force: bool) -> None:
     """Initialize the database schema."""
+    logger = get_logger(__name__)
     console.print("[bold cyan]Initializing database...[/bold cyan]")
+
     if force:
         console.print("[yellow]⚠ Force mode: existing database will be recreated[/yellow]")
-    console.print("[dim]Database initialization will be implemented in Issue #4[/dim]")
+
+    try:
+        init_db(force=force)
+        console.print("[green]✓ Database initialized successfully[/green]")
+
+        # Show database location
+        cfg = get_config(ctx.obj.get("config"))
+        if cfg.database.url:
+            console.print(f"  Database: {cfg.database.url}")
+        else:
+            console.print(f"  Database: {cfg.database.path}")
+
+    except RuntimeError as e:
+        console.print(f"[red]✗ {e}[/red]")
+        console.print("[dim]  Use --force to recreate the database[/dim]")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}", exc_info=True)
+        console.print(f"[bold red]✗ Database initialization failed:[/bold red] {e}")
+        sys.exit(1)
 
 
 @db.command("stats")
 def db_stats() -> None:
     """Show database statistics."""
+    from haar.storage import CollectionLog, Forecast, Location, ModelRun, Observation, TerrainFeature
+
     console.print("[bold cyan]Database Statistics[/bold cyan]\n")
 
-    # Placeholder table
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Table")
-    table.add_column("Records", justify="right")
-    table.add_column("Size", justify="right")
+    try:
+        with get_session() as session:
+            # Query counts for each table
+            counts = {
+                "locations": session.query(Location).count(),
+                "observations": session.query(Observation).count(),
+                "forecasts": session.query(Forecast).count(),
+                "terrain_features": session.query(TerrainFeature).count(),
+                "model_runs": session.query(ModelRun).count(),
+                "collection_logs": session.query(CollectionLog).count(),
+            }
 
-    table.add_row("locations", "-", "-")
-    table.add_row("observations", "-", "-")
-    table.add_row("forecasts", "-", "-")
-    table.add_row("terrain_features", "-", "-")
-    table.add_row("model_runs", "-", "-")
+        # Create table
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Table")
+        table.add_column("Records", justify="right")
 
-    console.print(table)
-    console.print("\n[dim]Database statistics will be implemented in Issue #4[/dim]")
+        for table_name, count in counts.items():
+            table.add_row(table_name, str(count))
+
+        console.print(table)
+
+    except Exception as e:
+        console.print(f"[red]Error querying database:[/red] {e}")
+        console.print("[dim]Database may not be initialized. Run 'haar db init' first.[/dim]")
+        sys.exit(1)
 
 
 @db.command("vacuum")

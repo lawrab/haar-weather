@@ -32,9 +32,16 @@ def test_config_show():
 def test_db_stats():
     """Test db stats command."""
     runner = CliRunner()
-    result = runner.invoke(cli, ["db", "stats"])
-    assert result.exit_code == 0
-    assert "Database Statistics" in result.output
+
+    # Initialize database first
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli, ["db", "init"])
+        assert result.exit_code == 0
+
+        # Now check stats
+        result = runner.invoke(cli, ["db", "stats"])
+        assert result.exit_code == 0
+        assert "Database Statistics" in result.output
 
 
 def test_collect_status():
