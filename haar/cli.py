@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from haar import __version__
+from haar.collectors import OpenMeteoCollector
 from haar.config import HaarConfig, get_config
 from haar.logging import get_logger, setup_logging
 from haar.storage import get_session, init_db
@@ -276,29 +277,125 @@ def collect() -> None:
 @click.option("--backfill", type=int, help="Backfill N days of historical data")
 def collect_run(source: str, backfill: Optional[int]) -> None:
     """Run data collection."""
+    logger = get_logger(__name__)
     console.print(f"[bold cyan]Collecting data from: {source}[/bold cyan]")
+
     if backfill:
-        console.print(f"Backfilling {backfill} days of historical data")
-    console.print("[dim]Data collection will be implemented in Issues #7-14[/dim]")
+        console.print(f"[yellow]Backfill option not yet implemented[/yellow]")
+
+    total_collected = 0
+    errors = []
+
+    try:
+        # Collect from Open-Meteo
+        if source in ("all", "openmeteo"):
+            try:
+                console.print("\n[cyan]→[/cyan] Collecting from Open-Meteo...")
+                with OpenMeteoCollector() as collector:
+                    count = collector.collect()
+                console.print(f"  [green]✓[/green] Collected {count} forecasts from Open-Meteo")
+                total_collected += count
+            except Exception as e:
+                error_msg = f"Open-Meteo collection failed: {e}"
+                logger.error(error_msg, exc_info=True)
+                console.print(f"  [red]✗[/red] {error_msg}")
+                errors.append(("Open-Meteo", str(e)))
+
+        # Placeholder for other sources
+        if source in ("all", "metoffice"):
+            console.print("\n[dim]Met Office collector not yet implemented[/dim]")
+
+        if source in ("all", "wow"):
+            console.print("\n[dim]WOW collector not yet implemented[/dim]")
+
+        # Summary
+        console.print(f"\n[bold]Total: {total_collected} records collected[/bold]")
+
+        if errors:
+            console.print(f"\n[yellow]Errors ({len(errors)}):[/yellow]")
+            for source_name, error in errors:
+                console.print(f"  • {source_name}: {error}")
+            sys.exit(1)
+
+    except Exception as e:
+        logger.error(f"Collection failed: {e}", exc_info=True)
+        console.print(f"\n[bold red]✗ Collection failed:[/bold red] {e}")
+        sys.exit(1)
 
 
 @collect.command("status")
 def collect_status() -> None:
-    """Show collection status and data gaps."""
+    """Show collection status and recent runs."""
+    from haar.storage import CollectionLog
+
     console.print("[bold cyan]Collection Status[/bold cyan]\n")
 
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Source")
-    table.add_column("Last Run")
-    table.add_column("Status")
-    table.add_column("Records")
+    try:
+        with get_session() as session:
+            # Get recent collection logs
+            logs = (
+                session.query(CollectionLog)
+                .order_by(CollectionLog.started_at.desc())
+                .limit(10)
+                .all()
+            )
 
-    table.add_row("openmeteo", "-", "-", "-")
-    table.add_row("metoffice", "-", "-", "-")
-    table.add_row("wow", "-", "-", "-")
+        if not logs:
+            console.print("[dim]No collection runs found. Run 'haar collect run' first.[/dim]")
+            return
 
-    console.print(table)
-    console.print("\n[dim]Collection status will be implemented in Issue #14[/dim]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Collector")
+        table.add_column("Started")
+        table.add_column("Duration")
+        table.add_column("Status")
+        table.add_column("Records", justify="right")
+
+        for log in logs:
+            # Format duration
+            if log.finished_at:
+                duration = (log.finished_at - log.started_at).total_seconds()
+                duration_str = f"{duration:.1f}s"
+            else:
+                duration_str = "running"
+
+            # Format started time (relative)
+            from datetime import datetime, timezone
+            started = log.started_at.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            time_ago = now - started
+            if time_ago.days > 0:
+                started_str = f"{time_ago.days}d ago"
+            elif time_ago.seconds > 3600:
+                started_str = f"{time_ago.seconds // 3600}h ago"
+            elif time_ago.seconds > 60:
+                started_str = f"{time_ago.seconds // 60}m ago"
+            else:
+                started_str = f"{time_ago.seconds}s ago"
+
+            # Color-code status
+            status_str = log.status
+            if log.status == "success":
+                status_str = f"[green]{log.status}[/green]"
+            elif log.status == "failed":
+                status_str = f"[red]{log.status}[/red]"
+            elif log.status == "partial":
+                status_str = f"[yellow]{log.status}[/yellow]"
+
+            table.add_row(
+                log.collector,
+                started_str,
+                duration_str,
+                status_str,
+                str(log.records_collected or 0),
+            )
+
+        console.print(table)
+
+    except Exception as e:
+        console.print(f"[red]Error querying collection logs:[/red] {e}")
+        console.print("[dim]Database may not be initialized. Run 'haar db init' first.[/dim]")
+        sys.exit(1)
 
 
 # ============================================================================
