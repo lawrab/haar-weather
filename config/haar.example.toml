@@ -1,0 +1,57 @@
+# Haar Weather Prediction System Configuration
+# Copy this file to haar.toml and customize for your location
+
+[location]
+# Your target location for weather prediction
+name = "Home"
+latitude = 55.9533  # Edinburgh coordinates (example)
+longitude = -3.1883
+radius_km = 200  # Search radius for nearby stations
+
+[database]
+# Database connection settings
+path = "data/haar.db"
+# For PostgreSQL (future):
+# url = "postgresql://user:password@localhost/haar"
+
+[collection]
+# Data collection settings
+interval_minutes = 60
+backfill_days = 365  # How many days of historical data to fetch initially
+
+[sources.openmeteo]
+# Open-Meteo API (no key required)
+enabled = true
+models = ["ecmwf_ifs04", "gfs_seamless", "icon_seamless"]
+cache_hours = 1  # Cache responses for this many hours
+
+[sources.metoffice]
+# Met Office DataPoint API
+enabled = true
+# Get your free API key from: https://datahub.metoffice.gov.uk
+api_key_env = "METOFFICE_API_KEY"  # Environment variable name
+
+[sources.wow]
+# Met Office Weather Observations Website (Personal Weather Stations)
+enabled = true
+search_radius_km = 50
+min_station_uptime = 0.8  # Only use stations with 80%+ uptime
+
+[sources.terrain]
+# Terrain data source
+dataset = "srtm"  # Options: "srtm" (easier) or "os_terrain_50" (UK specific)
+cache_dir = "data/terrain"
+
+[models]
+# Machine learning model settings
+target_variables = ["temperature_c", "precipitation_mm", "wind_speed_ms"]
+forecast_horizons_hours = [1, 3, 6, 12, 24, 48, 72]
+min_training_days = 90  # Minimum days of data before training
+
+[logging]
+# Logging configuration
+level = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+file = "data/logs/haar.log"
+console = true
+max_bytes = 10485760  # 10MB
+backup_count = 5

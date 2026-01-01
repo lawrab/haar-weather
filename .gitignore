@@ -29,6 +29,8 @@ env/
 
 # Data (IMPORTANT - don't commit data!)
 data/
+!data/.gitkeep
+!data/logs/.gitkeep
 *.db
 *.sqlite
 *.sqlite3
