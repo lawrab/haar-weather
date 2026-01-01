@@ -10,6 +10,7 @@ from rich.table import Table
 
 from haar import __version__
 from haar.config import HaarConfig, get_config
+from haar.logging import setup_logging
 
 console = Console()
 
@@ -39,6 +40,14 @@ def cli(ctx: click.Context, config: Optional[Path], verbose: int) -> None:
     ctx.ensure_object(dict)
     ctx.obj["config"] = config or Path("./config/haar.toml")
     ctx.obj["verbose"] = verbose
+
+    # Setup logging based on config and verbosity
+    try:
+        cfg = get_config(config or Path("./config/haar.toml"))
+        setup_logging(cfg.logging, verbose=verbose)
+    except Exception:
+        # If config loading fails, use basic logging
+        setup_logging(verbose=verbose)
 
 
 # ============================================================================
