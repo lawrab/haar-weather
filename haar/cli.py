@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from haar import __version__
+from haar.config import HaarConfig, get_config
 
 console = Console()
 
@@ -57,14 +58,79 @@ def config_show(ctx: click.Context) -> None:
     """Display current configuration."""
     config_path = ctx.obj["config"]
 
-    if not config_path.exists():
-        console.print(f"[yellow]⚠ Configuration file not found: {config_path}[/yellow]")
-        console.print("\nTo create a configuration file:")
-        console.print("  cp config/haar.example.toml config/haar.toml")
-        return
+    try:
+        cfg = get_config(config_path, reload=True)
+        config_exists = config_path.exists()
 
-    console.print(f"[bold cyan]Configuration:[/bold cyan] {config_path}")
-    console.print("\n[dim]Configuration loading will be implemented in Issue #3[/dim]")
+        console.print(f"[bold cyan]Configuration:[/bold cyan] {config_path}")
+        if not config_exists:
+            console.print(
+                "[yellow]⚠ Using default configuration (file not found)[/yellow]\n"
+            )
+
+        # Location
+        table = Table(title="Location", show_header=False)
+        table.add_row("Name", cfg.location.name)
+        table.add_row("Latitude", f"{cfg.location.latitude}°")
+        table.add_row("Longitude", f"{cfg.location.longitude}°")
+        table.add_row("Search Radius", f"{cfg.location.radius_km} km")
+        console.print(table)
+
+        # Database
+        table = Table(title="Database", show_header=False)
+        table.add_row("Path", str(cfg.database.path))
+        if cfg.database.url:
+            table.add_row("URL", cfg.database.url)
+        console.print(table)
+
+        # Collection
+        table = Table(title="Collection", show_header=False)
+        table.add_row("Interval", f"{cfg.collection.interval_minutes} minutes")
+        table.add_row("Backfill", f"{cfg.collection.backfill_days} days")
+        console.print(table)
+
+        # Data Sources
+        table = Table(title="Data Sources", show_header=True, header_style="bold magenta")
+        table.add_column("Source")
+        table.add_column("Enabled")
+        table.add_column("Details")
+
+        table.add_row(
+            "Open-Meteo",
+            "✓" if cfg.sources.openmeteo.enabled else "✗",
+            f"{len(cfg.sources.openmeteo.models)} models",
+        )
+        table.add_row(
+            "Met Office",
+            "✓" if cfg.sources.metoffice.enabled else "✗",
+            "API key " + ("set" if cfg.sources.metoffice.api_key else "missing"),
+        )
+        table.add_row(
+            "WOW",
+            "✓" if cfg.sources.wow.enabled else "✗",
+            f"{cfg.sources.wow.search_radius_km} km radius",
+        )
+        table.add_row(
+            "Terrain", "✓", cfg.sources.terrain.dataset
+        )
+        console.print(table)
+
+        # Models
+        table = Table(title="ML Models", show_header=False)
+        table.add_row("Target Variables", ", ".join(cfg.models.target_variables))
+        table.add_row(
+            "Forecast Horizons",
+            ", ".join(f"{h}h" for h in cfg.models.forecast_horizons_hours),
+        )
+        table.add_row("Min Training Days", str(cfg.models.min_training_days))
+        console.print(table)
+
+        if not config_exists:
+            console.print("\n[dim]To create a configuration file:[/dim]")
+            console.print("[dim]  cp config/haar.example.toml config/haar.toml[/dim]")
+
+    except Exception as e:
+        console.print(f"[bold red]Error loading configuration:[/bold red] {e}")
 
 
 @config.command("set")
