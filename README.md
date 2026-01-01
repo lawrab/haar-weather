@@ -34,35 +34,67 @@ Haar is a hobby project that aims to create hyperlocal weather forecasts for a ~
 
 ## Quick Start
 
-> **Note**: The project is in early development. Full installation instructions will be available after Phase 1 completion.
+> **Note**: The project is in early development. Full functionality will be available after Phase 1 completion.
 
 ### Requirements
 - Python 3.11+
-- NixOS (recommended) or manual dependency installation
+- NixOS with Nix flakes enabled (recommended) or manual dependency installation
 - SQLite
 - Met Office API key (free from [datahub.metoffice.gov.uk](https://datahub.metoffice.gov.uk))
 
-### Development Setup (Planned)
+### Development Setup
+
+#### Option 1: NixOS with Flakes (Recommended)
 
 ```bash
 # Clone the repository
 git clone https://github.com/lawrab/haar-weather.git
 cd haar-weather
 
-# Enter Nix development shell (NixOS)
+# Enter Nix development shell (installs all dependencies automatically)
 nix develop
 
-# Or install dependencies manually
-pip install -e .
+# The package will be installed automatically in development mode
+# You should see a welcome message with quick start commands
+```
 
+**Optional**: Use direnv for automatic shell activation:
+```bash
+# Install direnv
+nix-env -iA nixpkgs.direnv
+
+# Allow direnv in this directory
+direnv allow
+
+# Now the shell activates automatically when you cd into the directory!
+```
+
+#### Option 2: Manual Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/lawrab/haar-weather.git
+cd haar-weather
+
+# Create virtual environment
+python3.11 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -e ".[dev]"
+```
+
+### Configuration (Coming Soon)
+
+```bash
 # Initialize configuration
 cp config/haar.example.toml config/haar.toml
 # Edit config/haar.toml with your location and API keys
 
-# Initialize database
+# Initialize database (requires Issue #4)
 haar db init
 
-# Collect initial data
+# Collect initial data (requires Issue #8+)
 haar collect
 ```
 
@@ -75,7 +107,8 @@ See [docs/haar-project-spec.md](docs/haar-project-spec.md) for comprehensive doc
 ### Phase 1: Foundation (Current)
 - [x] Project planning and specification
 - [x] GitHub repository setup
-- [ ] Project scaffolding
+- [x] Project scaffolding
+- [x] NixOS development environment
 - [ ] Configuration system
 - [ ] Database schema
 - [ ] CLI framework

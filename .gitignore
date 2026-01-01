@@ -80,6 +80,7 @@ cache/
 # Nix
 result
 result-*
+.direnv/
 
 # MyPy
 .mypy_cache/
