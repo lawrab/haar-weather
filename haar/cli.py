@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from haar import __version__
-from haar.collectors import MetOfficeObservationsCollector, OpenMeteoCollector
+from haar.collectors import MetOfficeObservationsCollector, NetatmoCollector, OpenMeteoCollector
 from haar.config import HaarConfig, get_config
 from haar.logging import get_logger, setup_logging
 from haar.storage import get_session, init_db, reset_db_connection
@@ -50,6 +50,50 @@ def cli(ctx: click.Context, config: Optional[Path], verbose: int) -> None:
     except Exception:
         # If config loading fails, use basic logging
         setup_logging(verbose=verbose)
+
+
+# ============================================================================
+# Dashboard Command
+# ============================================================================
+
+
+@cli.command()
+@click.option("--port", default=8501, help="Port to run the dashboard on")
+@click.option("--host", default="localhost", help="Host to bind to")
+def dashboard(port: int, host: str) -> None:
+    """Launch the Streamlit web dashboard."""
+    import subprocess
+    import sys
+
+    console.print("[bold cyan]Launching Haar Dashboard...[/bold cyan]")
+    console.print(f"  URL: http://{host}:{port}")
+    console.print("[dim]  Press Ctrl+C to stop[/dim]\n")
+
+    # Get the path to the dashboard module
+    dashboard_path = Path(__file__).parent / "visualisation" / "dashboard.py"
+
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "streamlit",
+                "run",
+                str(dashboard_path),
+                "--server.port",
+                str(port),
+                "--server.address",
+                host,
+                "--server.headless",
+                "true",
+            ],
+            check=True,
+        )
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Dashboard stopped.[/yellow]")
+    except FileNotFoundError:
+        console.print("[red]Streamlit not installed. Run: pip install streamlit[/red]")
+        sys.exit(1)
 
 
 # ============================================================================
@@ -406,9 +450,23 @@ def collect_run(source: str, backfill: Optional[int]) -> None:
             else:
                 console.print("\n[dim]Met Office API key not configured (set METOFFICE_OBSERVATIONS_API_KEY)[/dim]")
 
-        # Placeholder for Netatmo
+        # Collect from Netatmo (PWS observations)
         if source in ("all", "netatmo"):
-            console.print("\n[dim]Netatmo collector not yet implemented (Issue #42)[/dim]")
+            cfg = get_config()
+            if cfg.sources.netatmo.access_token:
+                try:
+                    console.print("\n[cyan]→[/cyan] Collecting from Netatmo...")
+                    with NetatmoCollector() as collector:
+                        count = collector.collect()
+                    console.print(f"  [green]✓[/green] Collected {count} observations from Netatmo")
+                    total_collected += count
+                except Exception as e:
+                    error_msg = f"Netatmo collection failed: {e}"
+                    logger.error(error_msg, exc_info=True)
+                    console.print(f"  [red]✗[/red] {error_msg}")
+                    errors.append(("Netatmo", str(e)))
+            else:
+                console.print("\n[dim]Netatmo access token not configured (set NETATMO_ACCESS_TOKEN)[/dim]")
 
         # Summary
         console.print(f"\n[bold]Total: {total_collected} records collected[/bold]")
