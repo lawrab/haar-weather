@@ -4,6 +4,11 @@ import os
 from pathlib import Path
 from typing import List, Literal, Optional
 
+from dotenv import load_dotenv
+
+# Load .env file if it exists
+load_dotenv()
+
 try:
     import tomllib  # Python 3.11+
 except ImportError:
@@ -62,11 +67,12 @@ class OpenMeteoConfig(BaseModel):
 
 
 class MetOfficeConfig(BaseModel):
-    """Met Office DataPoint API configuration."""
+    """Met Office Weather DataHub API configuration."""
 
     enabled: bool = Field(default=True, description="Enable Met Office collector")
     api_key_env: str = Field(
-        default="METOFFICE_API_KEY", description="Environment variable for API key"
+        default="METOFFICE_DATAHUB_API_KEY",
+        description="Environment variable for API key",
     )
 
     @property
@@ -75,14 +81,56 @@ class MetOfficeConfig(BaseModel):
         return os.getenv(self.api_key_env)
 
 
-class WOWConfig(BaseModel):
-    """Met Office WOW (Weather Observations Website) configuration."""
+class NetatmoConfig(BaseModel):
+    """Netatmo public weather stations configuration."""
 
-    enabled: bool = Field(default=True, description="Enable WOW collector")
-    search_radius_km: float = Field(default=50, gt=0, description="Station search radius")
-    min_station_uptime: float = Field(
-        default=0.8, ge=0, le=1, description="Minimum station uptime"
+    enabled: bool = Field(default=True, description="Enable Netatmo collector")
+    client_id_env: str = Field(
+        default="NETATMO_CLIENT_ID",
+        description="Environment variable for client ID",
     )
+    client_secret_env: str = Field(
+        default="NETATMO_CLIENT_SECRET",
+        description="Environment variable for client secret",
+    )
+    search_radius_km: float = Field(
+        default=50, gt=0, description="Station search radius in km"
+    )
+
+    @property
+    def client_id(self) -> Optional[str]:
+        """Get client ID from environment."""
+        return os.getenv(self.client_id_env)
+
+    @property
+    def client_secret(self) -> Optional[str]:
+        """Get client secret from environment."""
+        return os.getenv(self.client_secret_env)
+
+    @property
+    def access_token(self) -> Optional[str]:
+        """Get access token from environment."""
+        return os.getenv("NETATMO_ACCESS_TOKEN")
+
+    @property
+    def refresh_token(self) -> Optional[str]:
+        """Get refresh token from environment."""
+        return os.getenv("NETATMO_REFRESH_TOKEN")
+
+
+class WeatherUndergroundConfig(BaseModel):
+    """Weather Underground PWS configuration."""
+
+    enabled: bool = Field(default=False, description="Enable Weather Underground collector")
+    api_key_env: str = Field(
+        default="WUNDERGROUND_API_KEY",
+        description="Environment variable for API key",
+    )
+
+    @property
+    def api_key(self) -> Optional[str]:
+        """Get API key from environment."""
+        return os.getenv(self.api_key_env)
 
 
 class TerrainConfig(BaseModel):
@@ -99,7 +147,8 @@ class SourcesConfig(BaseModel):
 
     openmeteo: OpenMeteoConfig = Field(default_factory=OpenMeteoConfig)
     metoffice: MetOfficeConfig = Field(default_factory=MetOfficeConfig)
-    wow: WOWConfig = Field(default_factory=WOWConfig)
+    netatmo: NetatmoConfig = Field(default_factory=NetatmoConfig)
+    wunderground: WeatherUndergroundConfig = Field(default_factory=WeatherUndergroundConfig)
     terrain: TerrainConfig = Field(default_factory=TerrainConfig)
 
 
