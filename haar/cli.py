@@ -12,7 +12,7 @@ from haar import __version__
 from haar.collectors import MetOfficeObservationsCollector, OpenMeteoCollector
 from haar.config import HaarConfig, get_config
 from haar.logging import get_logger, setup_logging
-from haar.storage import get_session, init_db
+from haar.storage import get_session, init_db, reset_db_connection
 
 console = Console()
 
@@ -259,6 +259,88 @@ def db_export(format: str, output: Optional[str]) -> None:
     console.print(f"[bold cyan]Exporting database to {format.upper()}...[/bold cyan]")
     console.print(f"Output: {output or 'stdout'}")
     console.print("[dim]Database export will be implemented in Issue #4[/dim]")
+
+
+@db.command("reset")
+@click.option("--logs", is_flag=True, help="Also clear log files")
+@click.option("--cache", is_flag=True, help="Also clear terrain cache")
+@click.option("--all", "clear_all", is_flag=True, help="Clear everything (db, logs, cache)")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+@click.pass_context
+def db_reset(ctx: click.Context, logs: bool, cache: bool, clear_all: bool, yes: bool) -> None:
+    """Reset database and optionally clear logs/cache.
+
+    By default, only deletes the database. Use flags to clear more:
+
+    \b
+    haar db reset           # Delete database only
+    haar db reset --logs    # Delete database and logs
+    haar db reset --cache   # Delete database and terrain cache
+    haar db reset --all     # Delete everything
+    """
+    import shutil
+
+    cfg = get_config(ctx.obj.get("config"))
+
+    # Determine what to delete
+    delete_logs = logs or clear_all
+    delete_cache = cache or clear_all
+
+    # Build list of items to delete
+    items_to_delete = []
+
+    # Database
+    db_path = cfg.database.path
+    if db_path.exists():
+        items_to_delete.append(("Database", db_path, "file"))
+
+    # Logs
+    log_dir = cfg.logging.file.parent
+    if delete_logs and log_dir.exists():
+        items_to_delete.append(("Logs", log_dir, "directory"))
+
+    # Terrain cache
+    terrain_dir = cfg.sources.terrain.cache_dir
+    if delete_cache and terrain_dir.exists():
+        items_to_delete.append(("Terrain cache", terrain_dir, "directory"))
+
+    if not items_to_delete:
+        console.print("[yellow]Nothing to delete.[/yellow]")
+        return
+
+    # Show what will be deleted
+    console.print("[bold red]The following will be deleted:[/bold red]\n")
+    for name, path, item_type in items_to_delete:
+        if item_type == "directory":
+            console.print(f"  • {name}: {path}/ (directory)")
+        else:
+            console.print(f"  • {name}: {path}")
+
+    console.print()
+
+    # Confirm unless --yes flag
+    if not yes:
+        if not click.confirm("Are you sure you want to proceed?"):
+            console.print("[dim]Aborted.[/dim]")
+            return
+
+    # Reset database connection to release file handles
+    reset_db_connection()
+
+    # Delete items
+    deleted_count = 0
+    for name, path, item_type in items_to_delete:
+        try:
+            if item_type == "directory":
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            console.print(f"[green]✓ Deleted {name}[/green]")
+            deleted_count += 1
+        except Exception as e:
+            console.print(f"[red]✗ Failed to delete {name}: {e}[/red]")
+
+    console.print(f"\n[bold cyan]Reset complete.[/bold cyan] {deleted_count} item(s) deleted.")
 
 
 # ============================================================================
