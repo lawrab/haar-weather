@@ -66,12 +66,27 @@ class OpenMeteoConfig(BaseModel):
     cache_hours: int = Field(default=1, ge=0, description="Response cache duration")
 
 
-class MetOfficeConfig(BaseModel):
-    """Met Office Weather DataHub API configuration."""
+class MetOfficeAtmosphericConfig(BaseModel):
+    """Met Office Weather DataHub Atmospheric Models API configuration."""
 
-    enabled: bool = Field(default=True, description="Enable Met Office collector")
+    enabled: bool = Field(default=True, description="Enable atmospheric models collector")
     api_key_env: str = Field(
-        default="METOFFICE_DATAHUB_API_KEY",
+        default="METOFFICE_ATMOSPHERIC_API_KEY",
+        description="Environment variable for API key",
+    )
+
+    @property
+    def api_key(self) -> Optional[str]:
+        """Get API key from environment."""
+        return os.getenv(self.api_key_env)
+
+
+class MetOfficeObservationsConfig(BaseModel):
+    """Met Office Weather DataHub Land Observations API configuration."""
+
+    enabled: bool = Field(default=True, description="Enable observations collector")
+    api_key_env: str = Field(
+        default="METOFFICE_OBSERVATIONS_API_KEY",
         description="Environment variable for API key",
     )
 
@@ -146,7 +161,12 @@ class SourcesConfig(BaseModel):
     """Data sources configuration."""
 
     openmeteo: OpenMeteoConfig = Field(default_factory=OpenMeteoConfig)
-    metoffice: MetOfficeConfig = Field(default_factory=MetOfficeConfig)
+    metoffice_atmospheric: MetOfficeAtmosphericConfig = Field(
+        default_factory=MetOfficeAtmosphericConfig
+    )
+    metoffice_observations: MetOfficeObservationsConfig = Field(
+        default_factory=MetOfficeObservationsConfig
+    )
     netatmo: NetatmoConfig = Field(default_factory=NetatmoConfig)
     wunderground: WeatherUndergroundConfig = Field(default_factory=WeatherUndergroundConfig)
     terrain: TerrainConfig = Field(default_factory=TerrainConfig)

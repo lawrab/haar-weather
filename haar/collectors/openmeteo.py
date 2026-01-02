@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from haar.collectors.base import BaseCollector
 from haar.config import LocationConfig, OpenMeteoConfig, get_config
@@ -163,10 +164,11 @@ class OpenMeteoCollector(BaseCollector):
             self.logger.warning(f"No forecast data returned for {model_family}")
             return 0
 
-        # Issued time is the current API request time
-        issued_at = datetime.utcnow()
+        # Issued time rounded to the hour (for consistent upsert)
+        now = datetime.utcnow()
+        issued_at = now.replace(minute=0, second=0, microsecond=0)
 
-        forecasts = []
+        forecast_dicts = []
         for i, time_str in enumerate(times):
             # Parse valid time
             valid_at = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
@@ -176,22 +178,22 @@ class OpenMeteoCollector(BaseCollector):
             if lead_time_hours < 0:
                 continue
 
-            # Extract weather variables
-            forecast = Forecast(
-                location_id=location_id,
-                source=f"openmeteo_{model_family}",
-                issued_at=issued_at,
-                valid_at=valid_at,
-                lead_time_hours=lead_time_hours,
-                temperature_c=self._get_value(hourly, "temperature_2m", i),
-                humidity_pct=self._get_value(hourly, "relative_humidity_2m", i),
-                pressure_hpa=self._get_value(hourly, "pressure_msl", i),
-                wind_speed_ms=self._get_value(hourly, "wind_speed_10m", i),
-                wind_direction_deg=self._get_value(hourly, "wind_direction_10m", i),
-                precipitation_mm=self._get_value(hourly, "precipitation", i),
-                cloud_cover_pct=self._get_value(hourly, "cloud_cover", i),
-                weather_code=self._get_int_value(hourly, "weather_code", i),
-                raw_data={
+            # Extract weather variables as dict for upsert
+            forecast_dicts.append({
+                "location_id": location_id,
+                "source": f"openmeteo_{model_family}",
+                "issued_at": issued_at,
+                "valid_at": valid_at,
+                "lead_time_hours": lead_time_hours,
+                "temperature_c": self._get_value(hourly, "temperature_2m", i),
+                "humidity_pct": self._get_value(hourly, "relative_humidity_2m", i),
+                "pressure_hpa": self._get_value(hourly, "pressure_msl", i),
+                "wind_speed_ms": self._get_value(hourly, "wind_speed_10m", i),
+                "wind_direction_deg": self._get_value(hourly, "wind_direction_10m", i),
+                "precipitation_mm": self._get_value(hourly, "precipitation", i),
+                "cloud_cover_pct": self._get_value(hourly, "cloud_cover", i),
+                "weather_code": self._get_int_value(hourly, "weather_code", i),
+                "raw_data": {
                     "model_family": model_family,
                     "endpoint": self.ENDPOINTS.get(model_family),
                     "api_response": {
@@ -199,16 +201,32 @@ class OpenMeteoCollector(BaseCollector):
                         for k, v in hourly.items()
                     },
                 },
-            )
-            forecasts.append(forecast)
+            })
 
-        # Store forecasts in database
+        if not forecast_dicts:
+            return 0
+
+        # Store forecasts with upsert (insert or update on conflict)
         with get_session() as session:
-            for forecast in forecasts:
-                # Use merge to handle duplicates (update if exists)
-                session.merge(forecast)
+            stmt = sqlite_insert(Forecast).values(forecast_dicts)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["location_id", "source", "issued_at", "valid_at"],
+                set_={
+                    "lead_time_hours": stmt.excluded.lead_time_hours,
+                    "temperature_c": stmt.excluded.temperature_c,
+                    "humidity_pct": stmt.excluded.humidity_pct,
+                    "pressure_hpa": stmt.excluded.pressure_hpa,
+                    "wind_speed_ms": stmt.excluded.wind_speed_ms,
+                    "wind_direction_deg": stmt.excluded.wind_direction_deg,
+                    "precipitation_mm": stmt.excluded.precipitation_mm,
+                    "cloud_cover_pct": stmt.excluded.cloud_cover_pct,
+                    "weather_code": stmt.excluded.weather_code,
+                    "raw_data": stmt.excluded.raw_data,
+                },
+            )
+            session.execute(stmt)
 
-        return len(forecasts)
+        return len(forecast_dicts)
 
     def _get_value(self, data: Dict, key: str, index: int) -> Optional[float]:
         """Safely extract float value from API response.

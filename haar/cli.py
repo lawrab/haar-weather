@@ -9,10 +9,10 @@ from rich.console import Console
 from rich.table import Table
 
 from haar import __version__
-from haar.collectors import OpenMeteoCollector
+from haar.collectors import MetOfficeObservationsCollector, OpenMeteoCollector
 from haar.config import HaarConfig, get_config
 from haar.logging import get_logger, setup_logging
-from haar.storage import get_session, init_db
+from haar.storage import get_session, init_db, reset_db_connection
 
 console = Console()
 
@@ -112,14 +112,19 @@ def config_show(ctx: click.Context) -> None:
             f"{len(cfg.sources.openmeteo.models)} models",
         )
         table.add_row(
-            "Met Office",
-            "✓" if cfg.sources.metoffice.enabled else "✗",
-            "API key " + ("set" if cfg.sources.metoffice.api_key else "missing"),
+            "Met Office Atmospheric",
+            "✓" if cfg.sources.metoffice_atmospheric.enabled else "✗",
+            "API key " + ("set" if cfg.sources.metoffice_atmospheric.api_key else "missing"),
         )
         table.add_row(
-            "WOW",
-            "✓" if cfg.sources.wow.enabled else "✗",
-            f"{cfg.sources.wow.search_radius_km} km radius",
+            "Met Office Observations",
+            "✓" if cfg.sources.metoffice_observations.enabled else "✗",
+            "API key " + ("set" if cfg.sources.metoffice_observations.api_key else "missing"),
+        )
+        table.add_row(
+            "Netatmo",
+            "✓" if cfg.sources.netatmo.enabled else "✗",
+            f"{cfg.sources.netatmo.search_radius_km} km radius",
         )
         table.add_row(
             "Terrain", "✓", cfg.sources.terrain.dataset
@@ -256,6 +261,88 @@ def db_export(format: str, output: Optional[str]) -> None:
     console.print("[dim]Database export will be implemented in Issue #4[/dim]")
 
 
+@db.command("reset")
+@click.option("--logs", is_flag=True, help="Also clear log files")
+@click.option("--cache", is_flag=True, help="Also clear terrain cache")
+@click.option("--all", "clear_all", is_flag=True, help="Clear everything (db, logs, cache)")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+@click.pass_context
+def db_reset(ctx: click.Context, logs: bool, cache: bool, clear_all: bool, yes: bool) -> None:
+    """Reset database and optionally clear logs/cache.
+
+    By default, only deletes the database. Use flags to clear more:
+
+    \b
+    haar db reset           # Delete database only
+    haar db reset --logs    # Delete database and logs
+    haar db reset --cache   # Delete database and terrain cache
+    haar db reset --all     # Delete everything
+    """
+    import shutil
+
+    cfg = get_config(ctx.obj.get("config"))
+
+    # Determine what to delete
+    delete_logs = logs or clear_all
+    delete_cache = cache or clear_all
+
+    # Build list of items to delete
+    items_to_delete = []
+
+    # Database
+    db_path = cfg.database.path
+    if db_path.exists():
+        items_to_delete.append(("Database", db_path, "file"))
+
+    # Logs
+    log_dir = cfg.logging.file.parent
+    if delete_logs and log_dir.exists():
+        items_to_delete.append(("Logs", log_dir, "directory"))
+
+    # Terrain cache
+    terrain_dir = cfg.sources.terrain.cache_dir
+    if delete_cache and terrain_dir.exists():
+        items_to_delete.append(("Terrain cache", terrain_dir, "directory"))
+
+    if not items_to_delete:
+        console.print("[yellow]Nothing to delete.[/yellow]")
+        return
+
+    # Show what will be deleted
+    console.print("[bold red]The following will be deleted:[/bold red]\n")
+    for name, path, item_type in items_to_delete:
+        if item_type == "directory":
+            console.print(f"  • {name}: {path}/ (directory)")
+        else:
+            console.print(f"  • {name}: {path}")
+
+    console.print()
+
+    # Confirm unless --yes flag
+    if not yes:
+        if not click.confirm("Are you sure you want to proceed?"):
+            console.print("[dim]Aborted.[/dim]")
+            return
+
+    # Reset database connection to release file handles
+    reset_db_connection()
+
+    # Delete items
+    deleted_count = 0
+    for name, path, item_type in items_to_delete:
+        try:
+            if item_type == "directory":
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            console.print(f"[green]✓ Deleted {name}[/green]")
+            deleted_count += 1
+        except Exception as e:
+            console.print(f"[red]✗ Failed to delete {name}: {e}[/red]")
+
+    console.print(f"\n[bold cyan]Reset complete.[/bold cyan] {deleted_count} item(s) deleted.")
+
+
 # ============================================================================
 # Collection Commands
 # ============================================================================
@@ -270,7 +357,7 @@ def collect() -> None:
 @collect.command("run")
 @click.option(
     "--source",
-    type=click.Choice(["all", "openmeteo", "metoffice", "wow"]),
+    type=click.Choice(["all", "openmeteo", "metoffice", "netatmo"]),
     default="all",
     help="Data source to collect from",
 )
@@ -287,7 +374,7 @@ def collect_run(source: str, backfill: Optional[int]) -> None:
     errors = []
 
     try:
-        # Collect from Open-Meteo
+        # Collect from Open-Meteo (forecasts)
         if source in ("all", "openmeteo"):
             try:
                 console.print("\n[cyan]→[/cyan] Collecting from Open-Meteo...")
@@ -301,12 +388,27 @@ def collect_run(source: str, backfill: Optional[int]) -> None:
                 console.print(f"  [red]✗[/red] {error_msg}")
                 errors.append(("Open-Meteo", str(e)))
 
-        # Placeholder for other sources
+        # Collect from Met Office (observations)
         if source in ("all", "metoffice"):
-            console.print("\n[dim]Met Office collector not yet implemented[/dim]")
+            cfg = get_config()
+            if cfg.sources.metoffice_observations.api_key:
+                try:
+                    console.print("\n[cyan]→[/cyan] Collecting from Met Office...")
+                    with MetOfficeObservationsCollector() as collector:
+                        count = collector.collect()
+                    console.print(f"  [green]✓[/green] Collected {count} observations from Met Office")
+                    total_collected += count
+                except Exception as e:
+                    error_msg = f"Met Office collection failed: {e}"
+                    logger.error(error_msg, exc_info=True)
+                    console.print(f"  [red]✗[/red] {error_msg}")
+                    errors.append(("Met Office", str(e)))
+            else:
+                console.print("\n[dim]Met Office API key not configured (set METOFFICE_OBSERVATIONS_API_KEY)[/dim]")
 
-        if source in ("all", "wow"):
-            console.print("\n[dim]WOW collector not yet implemented[/dim]")
+        # Placeholder for Netatmo
+        if source in ("all", "netatmo"):
+            console.print("\n[dim]Netatmo collector not yet implemented (Issue #42)[/dim]")
 
         # Summary
         console.print(f"\n[bold]Total: {total_collected} records collected[/bold]")
