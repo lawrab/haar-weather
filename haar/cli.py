@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from haar import __version__
-from haar.collectors import OpenMeteoCollector
+from haar.collectors import MetOfficeObservationsCollector, OpenMeteoCollector
 from haar.config import HaarConfig, get_config
 from haar.logging import get_logger, setup_logging
 from haar.storage import get_session, init_db
@@ -112,14 +112,19 @@ def config_show(ctx: click.Context) -> None:
             f"{len(cfg.sources.openmeteo.models)} models",
         )
         table.add_row(
-            "Met Office",
-            "✓" if cfg.sources.metoffice.enabled else "✗",
-            "API key " + ("set" if cfg.sources.metoffice.api_key else "missing"),
+            "Met Office Atmospheric",
+            "✓" if cfg.sources.metoffice_atmospheric.enabled else "✗",
+            "API key " + ("set" if cfg.sources.metoffice_atmospheric.api_key else "missing"),
         )
         table.add_row(
-            "WOW",
-            "✓" if cfg.sources.wow.enabled else "✗",
-            f"{cfg.sources.wow.search_radius_km} km radius",
+            "Met Office Observations",
+            "✓" if cfg.sources.metoffice_observations.enabled else "✗",
+            "API key " + ("set" if cfg.sources.metoffice_observations.api_key else "missing"),
+        )
+        table.add_row(
+            "Netatmo",
+            "✓" if cfg.sources.netatmo.enabled else "✗",
+            f"{cfg.sources.netatmo.search_radius_km} km radius",
         )
         table.add_row(
             "Terrain", "✓", cfg.sources.terrain.dataset
@@ -270,7 +275,7 @@ def collect() -> None:
 @collect.command("run")
 @click.option(
     "--source",
-    type=click.Choice(["all", "openmeteo", "metoffice", "wow"]),
+    type=click.Choice(["all", "openmeteo", "metoffice", "netatmo"]),
     default="all",
     help="Data source to collect from",
 )
@@ -287,7 +292,7 @@ def collect_run(source: str, backfill: Optional[int]) -> None:
     errors = []
 
     try:
-        # Collect from Open-Meteo
+        # Collect from Open-Meteo (forecasts)
         if source in ("all", "openmeteo"):
             try:
                 console.print("\n[cyan]→[/cyan] Collecting from Open-Meteo...")
@@ -301,12 +306,27 @@ def collect_run(source: str, backfill: Optional[int]) -> None:
                 console.print(f"  [red]✗[/red] {error_msg}")
                 errors.append(("Open-Meteo", str(e)))
 
-        # Placeholder for other sources
+        # Collect from Met Office (observations)
         if source in ("all", "metoffice"):
-            console.print("\n[dim]Met Office collector not yet implemented[/dim]")
+            cfg = get_config()
+            if cfg.sources.metoffice_observations.api_key:
+                try:
+                    console.print("\n[cyan]→[/cyan] Collecting from Met Office...")
+                    with MetOfficeObservationsCollector() as collector:
+                        count = collector.collect()
+                    console.print(f"  [green]✓[/green] Collected {count} observations from Met Office")
+                    total_collected += count
+                except Exception as e:
+                    error_msg = f"Met Office collection failed: {e}"
+                    logger.error(error_msg, exc_info=True)
+                    console.print(f"  [red]✗[/red] {error_msg}")
+                    errors.append(("Met Office", str(e)))
+            else:
+                console.print("\n[dim]Met Office API key not configured (set METOFFICE_OBSERVATIONS_API_KEY)[/dim]")
 
-        if source in ("all", "wow"):
-            console.print("\n[dim]WOW collector not yet implemented[/dim]")
+        # Placeholder for Netatmo
+        if source in ("all", "netatmo"):
+            console.print("\n[dim]Netatmo collector not yet implemented (Issue #42)[/dim]")
 
         # Summary
         console.print(f"\n[bold]Total: {total_collected} records collected[/bold]")
