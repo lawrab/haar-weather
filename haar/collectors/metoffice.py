@@ -1,8 +1,9 @@
 """Met Office Weather DataHub collector for UK observations."""
 
 import logging
+import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -11,7 +12,74 @@ from haar.collectors.base import BaseCollector
 from haar.config import LocationConfig, MetOfficeObservationsConfig, get_config
 from haar.storage import Location, Observation, get_session
 
+
+def decode_geohash(geohash: str) -> Tuple[float, float]:
+    """Decode a geohash to latitude/longitude.
+
+    Simple implementation without external dependency.
+
+    Args:
+        geohash: Geohash string
+
+    Returns:
+        Tuple of (latitude, longitude)
+    """
+    BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz"
+
+    lat_range = [-90.0, 90.0]
+    lon_range = [-180.0, 180.0]
+    is_lon = True
+
+    for char in geohash.lower():
+        idx = BASE32.index(char)
+        for bit in [16, 8, 4, 2, 1]:
+            if is_lon:
+                mid = (lon_range[0] + lon_range[1]) / 2
+                if idx & bit:
+                    lon_range[0] = mid
+                else:
+                    lon_range[1] = mid
+            else:
+                mid = (lat_range[0] + lat_range[1]) / 2
+                if idx & bit:
+                    lat_range[0] = mid
+                else:
+                    lat_range[1] = mid
+            is_lon = not is_lon
+
+    lat = (lat_range[0] + lat_range[1]) / 2
+    lon = (lon_range[0] + lon_range[1]) / 2
+    return (lat, lon)
+
 logger = logging.getLogger(__name__)
+
+
+# Known Met Office observation station geohashes (discovered via API)
+# These rarely change - last updated January 2026
+SCOTTISH_STATIONS = [
+    "gfnmmy",  # Aberdeen
+    "gfjuxq",  # Aberdeenshire
+    "gf517k",  # Argyll and Bute
+    "gcgsc8",  # Argyll and Bute
+    "gcu2pd",  # Dumfries and Galloway
+    "gctpub",  # Dumfries and Galloway
+    "gcvw5v",  # Edinburgh
+    "gf5yws",  # Highland
+    "gfh7qb",  # Highland
+    "gfjm2y",  # Highland
+    "gf7cps",  # Highland
+    "gfk82s",  # Highland
+    "gfkgdg",  # Highland
+    "gfsb5g",  # Highland
+    "gfm8k6",  # Moray
+    "gf4wr9",  # Na h-Eileanan Siar
+    "gf7e0j",  # Na h-Eileanan Siar
+    "gfmzqh",  # Orkney Islands
+    "gcuy0c",  # Renfrewshire
+    "gcykcv",  # Scottish Borders
+    "gfwfdu",  # Shetland Islands
+    "gfxnj5",  # Shetland Islands
+]
 
 
 # Wind direction compass to degrees mapping
@@ -74,11 +142,13 @@ class MetOfficeObservationsCollector(BaseCollector):
             headers={"apikey": self.metoffice_config.api_key},
         )
 
-        # Cache for station geohashes (to reduce API calls)
+        # Cache for discovered stations (keyed by geohash)
         self._station_cache: Dict[str, Dict[str, Any]] = {}
 
     def collect(self) -> int:
         """Collect observation data from Met Office Land Observations API.
+
+        Collects from all configured stations (Scottish stations by default).
 
         Returns:
             Number of observation records collected
@@ -87,19 +157,20 @@ class MetOfficeObservationsCollector(BaseCollector):
         total_collected = 0
 
         try:
-            # Find nearest station to target location
-            station_info = self._find_nearest_station(
-                self.location_config.latitude,
-                self.location_config.longitude,
-            )
+            station_geohashes = self._get_stations()
+            self.logger.info(f"Collecting from {len(station_geohashes)} Met Office stations")
 
-            if not station_info:
-                self.logger.warning("No nearby Met Office station found")
-                return 0
-
-            # Collect observations from the station
-            count = self._collect_station_observations(station_info)
-            total_collected += count
+            # Collect observations from each station (with rate limiting)
+            for i, geohash in enumerate(station_geohashes):
+                try:
+                    count = self._collect_station_by_geohash(geohash)
+                    total_collected += count
+                    # Rate limit: ~2 requests per second to avoid 429 errors
+                    if i < len(station_geohashes) - 1:
+                        time.sleep(0.5)
+                except Exception as e:
+                    self.logger.warning(f"Failed to collect from {geohash}: {e}")
+                    continue
 
             # Log collection success
             self.log_collection_success(started_at, total_collected)
@@ -116,60 +187,15 @@ class MetOfficeObservationsCollector(BaseCollector):
             )
             raise
 
-    def _find_nearest_station(self, latitude: float, longitude: float) -> Optional[Dict[str, Any]]:
-        """Find nearest Met Office station to given coordinates.
+    def _collect_station_by_geohash(self, geohash: str) -> int:
+        """Collect observations from a station by geohash.
 
         Args:
-            latitude: Latitude (will be rounded to 2 decimal places)
-            longitude: Longitude (will be rounded to 2 decimal places)
-
-        Returns:
-            Station info dict with geohash, area, region, country, or None
-        """
-        # Check cache first
-        cache_key = f"{latitude:.2f},{longitude:.2f}"
-        if cache_key in self._station_cache:
-            return self._station_cache[cache_key]
-
-        # API requires max 2 decimal places
-        lat_rounded = round(latitude, 2)
-        lon_rounded = round(longitude, 2)
-
-        self.logger.debug(f"Finding nearest station to ({lat_rounded}, {lon_rounded})")
-
-        response = self.client.get(
-            f"{self.BASE_URL}/nearest",
-            params={"lat": lat_rounded, "lon": lon_rounded},
-        )
-        response.raise_for_status()
-
-        data = response.json()
-
-        if data and len(data) > 0:
-            station_info = data[0]
-            self._station_cache[cache_key] = station_info
-            self.logger.info(
-                f"Found nearest station: {station_info.get('area', 'Unknown')} "
-                f"(geohash: {station_info.get('geohash')})"
-            )
-            return station_info
-
-        return None
-
-    def _collect_station_observations(self, station_info: Dict[str, Any]) -> int:
-        """Collect observations from a specific station.
-
-        Args:
-            station_info: Station info dict containing geohash
+            geohash: Station geohash
 
         Returns:
             Number of observations collected
         """
-        geohash = station_info.get("geohash")
-        if not geohash:
-            self.logger.warning("Station info missing geohash")
-            return 0
-
         self.logger.debug(f"Collecting observations for geohash: {geohash}")
 
         response = self.client.get(f"{self.BASE_URL}/{geohash}")
@@ -178,11 +204,23 @@ class MetOfficeObservationsCollector(BaseCollector):
         observations_data = response.json()
 
         if not observations_data:
-            self.logger.warning(f"No observations returned for {geohash}")
+            self.logger.debug(f"No observations returned for {geohash}")
             return 0
 
-        # Parse and store observations
+        # Get station info from first observation or create minimal info
+        station_info = {"geohash": geohash, "area": "Unknown"}
+
         return self._parse_and_store_observations(observations_data, station_info)
+
+    def _get_stations(self) -> List[str]:
+        """Get list of station geohashes to collect from.
+
+        Returns all Scottish stations by default.
+
+        Returns:
+            List of station geohash strings
+        """
+        return SCOTTISH_STATIONS
 
     def _parse_and_store_observations(
         self, observations_data: List[Dict[str, Any]], station_info: Dict[str, Any]
@@ -199,6 +237,9 @@ class MetOfficeObservationsCollector(BaseCollector):
         geohash = station_info.get("geohash")
         area = station_info.get("area", "Unknown")
 
+        # Decode geohash to get actual station coordinates
+        station_lat, station_lon = decode_geohash(geohash)
+
         # Create location ID for this station
         location_id = f"metoffice_{geohash}"
 
@@ -209,8 +250,8 @@ class MetOfficeObservationsCollector(BaseCollector):
                 location = Location(
                     id=location_id,
                     name=f"Met Office - {area}",
-                    latitude=self.location_config.latitude,  # Approximate
-                    longitude=self.location_config.longitude,  # Approximate
+                    latitude=station_lat,
+                    longitude=station_lon,
                     location_type="metoffice",
                     source="metoffice_datahub",
                     station_metadata={
