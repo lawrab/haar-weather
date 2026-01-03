@@ -5,10 +5,19 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Tuple
 
 from haar.config import get_config
 from haar.storage import get_session, Observation, Forecast, Location, CollectionLog
+
+
+# Time range options with hours and aggregation settings
+TIME_RANGES = {
+    "Today": {"hours": 24, "aggregate": False},
+    "Week": {"hours": 168, "aggregate": False},
+    "Month": {"hours": 720, "aggregate": True, "freq": "D"},  # Daily
+    "3 Months": {"hours": 2160, "aggregate": True, "freq": "D"},  # Daily
+}
 
 
 def get_observations_df(hours: int = 72) -> pd.DataFrame:
@@ -36,12 +45,56 @@ def get_observations_df(hours: int = 72) -> pd.DataFrame:
                 "pressure_hpa": obs.pressure_hpa,
                 "wind_speed_ms": obs.wind_speed_ms,
                 "wind_direction_deg": obs.wind_direction_deg,
+                "precipitation_mm": obs.precipitation_mm,
                 "visibility_m": obs.visibility_m,
             }
             for obs in observations
         ]
 
         return pd.DataFrame(data)
+
+
+def aggregate_observations(df: pd.DataFrame, freq: str = "D") -> pd.DataFrame:
+    """Aggregate observations to daily summaries with min/max/mean.
+
+    Args:
+        df: Raw observations DataFrame
+        freq: Pandas frequency string ('D' for daily, 'H' for hourly)
+
+    Returns:
+        Aggregated DataFrame with mean, min, max columns
+    """
+    if df.empty:
+        return df
+
+    # Ensure observed_at is datetime
+    df = df.copy()
+    df["observed_at"] = pd.to_datetime(df["observed_at"])
+
+    # Group by date and source
+    df["date"] = df["observed_at"].dt.floor(freq)
+
+    numeric_cols = ["temperature_c", "humidity_pct", "pressure_hpa",
+                    "wind_speed_ms", "precipitation_mm"]
+
+    # Aggregate with multiple functions
+    agg_dict = {col: ["mean", "min", "max"] for col in numeric_cols if col in df.columns}
+    agg_dict["observed_at"] = "count"  # Count observations
+
+    grouped = df.groupby(["date", "source"]).agg(agg_dict).reset_index()
+
+    # Flatten column names
+    grouped.columns = [
+        f"{col[0]}_{col[1]}" if col[1] and col[0] != "date" and col[0] != "source"
+        else col[0]
+        for col in grouped.columns
+    ]
+
+    # Rename count column
+    if "observed_at_count" in grouped.columns:
+        grouped = grouped.rename(columns={"observed_at_count": "observation_count"})
+
+    return grouped
 
 
 def get_forecasts_df(hours: int = 168) -> pd.DataFrame:
@@ -125,6 +178,54 @@ def get_collection_stats() -> dict:
         }
 
 
+def plot_with_range(df: pd.DataFrame, x_col: str, y_col: str,
+                    title: str, y_label: str, aggregated: bool = False) -> go.Figure:
+    """Create a line plot, optionally with min/max range bands for aggregated data."""
+
+    if aggregated and f"{y_col}_mean" in df.columns:
+        # Aggregated data - show mean line with min/max bands
+        fig = go.Figure()
+
+        for source in df["source"].unique():
+            source_df = df[df["source"] == source].sort_values("date")
+
+            # Add min/max range as filled area
+            fig.add_trace(go.Scatter(
+                x=pd.concat([source_df["date"], source_df["date"][::-1]]),
+                y=pd.concat([source_df[f"{y_col}_max"], source_df[f"{y_col}_min"][::-1]]),
+                fill="toself",
+                fillcolor=f"rgba(100, 100, 100, 0.2)",
+                line=dict(color="rgba(255,255,255,0)"),
+                name=f"{source} (range)",
+                showlegend=False,
+            ))
+
+            # Add mean line
+            fig.add_trace(go.Scatter(
+                x=source_df["date"],
+                y=source_df[f"{y_col}_mean"],
+                mode="lines+markers",
+                name=source,
+            ))
+
+        fig.update_layout(
+            title=title,
+            xaxis_title="Date",
+            yaxis_title=y_label,
+        )
+        return fig
+    else:
+        # Raw data - simple line plot
+        return px.line(
+            df.sort_values(x_col),
+            x=x_col,
+            y=y_col,
+            color="source",
+            title=title,
+            labels={y_col: y_label, x_col: "Time"},
+        )
+
+
 def main():
     """Main dashboard entry point."""
     st.set_page_config(
@@ -138,7 +239,22 @@ def main():
 
     # Sidebar
     st.sidebar.header("Settings")
-    obs_hours = st.sidebar.slider("Observation history (hours)", 24, 168, 72)
+
+    # Time range selector
+    time_range = st.sidebar.selectbox(
+        "Time Range",
+        options=list(TIME_RANGES.keys()),
+        index=1,  # Default to "Week"
+    )
+    range_config = TIME_RANGES[time_range]
+
+    # Source filter
+    source_filter = st.sidebar.multiselect(
+        "Data Sources",
+        options=["netatmo", "metoffice_datahub", "era5_reanalysis"],
+        default=["netatmo", "metoffice_datahub", "era5_reanalysis"],
+    )
+
     auto_refresh = st.sidebar.checkbox("Auto-refresh (60s)", value=False)
 
     if auto_refresh:
@@ -147,13 +263,15 @@ def main():
     # Stats overview
     stats = get_collection_stats()
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.metric("Observations", f"{stats['observations']:,}")
     with col2:
         st.metric("Forecasts", f"{stats['forecasts']:,}")
     with col3:
         st.metric("Locations", stats['locations'])
+    with col4:
+        st.metric("Time Range", time_range)
 
     st.divider()
 
@@ -163,20 +281,33 @@ def main():
     with tab1:
         st.header("Weather Observations")
 
-        obs_df = get_observations_df(obs_hours)
+        # Show aggregation info
+        if range_config["aggregate"]:
+            st.info(f"📊 Showing daily aggregates (mean with min/max range) for {time_range}")
+
+        obs_df = get_observations_df(range_config["hours"])
+
+        # Filter by source
+        if not obs_df.empty and source_filter:
+            obs_df = obs_df[obs_df["source"].isin(source_filter)]
 
         if obs_df.empty:
-            st.warning("No observations found. Run `haar collect run --source metoffice` to collect data.")
+            st.warning("No observations found. Run `haar collect run` to collect data.")
         else:
+            # Aggregate if needed
+            if range_config["aggregate"]:
+                display_df = aggregate_observations(obs_df, range_config["freq"])
+                x_col = "date"
+            else:
+                display_df = obs_df
+                x_col = "observed_at"
+
             # Temperature chart
             st.subheader("Temperature")
-            fig_temp = px.line(
-                obs_df.sort_values("observed_at"),
-                x="observed_at",
-                y="temperature_c",
-                color="source",
-                title="Temperature Over Time",
-                labels={"temperature_c": "Temperature (°C)", "observed_at": "Time"},
+            fig_temp = plot_with_range(
+                display_df, x_col, "temperature_c",
+                "Temperature Over Time", "Temperature (°C)",
+                aggregated=range_config["aggregate"]
             )
             st.plotly_chart(fig_temp, width="stretch")
 
@@ -185,54 +316,57 @@ def main():
 
             with col1:
                 st.subheader("Humidity")
-                fig_hum = px.line(
-                    obs_df.sort_values("observed_at"),
-                    x="observed_at",
-                    y="humidity_pct",
-                    color="source",
-                    labels={"humidity_pct": "Humidity (%)", "observed_at": "Time"},
+                fig_hum = plot_with_range(
+                    display_df, x_col, "humidity_pct",
+                    "Humidity Over Time", "Humidity (%)",
+                    aggregated=range_config["aggregate"]
                 )
                 st.plotly_chart(fig_hum, width="stretch")
 
             with col2:
                 st.subheader("Pressure")
-                fig_pres = px.line(
-                    obs_df.sort_values("observed_at"),
-                    x="observed_at",
-                    y="pressure_hpa",
-                    color="source",
-                    labels={"pressure_hpa": "Pressure (hPa)", "observed_at": "Time"},
+                fig_pres = plot_with_range(
+                    display_df, x_col, "pressure_hpa",
+                    "Pressure Over Time", "Pressure (hPa)",
+                    aggregated=range_config["aggregate"]
                 )
                 st.plotly_chart(fig_pres, width="stretch")
 
             # Wind
-            st.subheader("Wind")
-            col1, col2 = st.columns(2)
+            st.subheader("Wind Speed")
+            fig_wind = plot_with_range(
+                display_df, x_col, "wind_speed_ms",
+                "Wind Speed Over Time", "Wind Speed (m/s)",
+                aggregated=range_config["aggregate"]
+            )
+            st.plotly_chart(fig_wind, width="stretch")
 
-            with col1:
-                fig_wind = px.line(
-                    obs_df.sort_values("observed_at"),
-                    x="observed_at",
-                    y="wind_speed_ms",
-                    color="source",
-                    labels={"wind_speed_ms": "Wind Speed (m/s)", "observed_at": "Time"},
-                )
-                st.plotly_chart(fig_wind, width="stretch")
+            # Summary stats
+            if range_config["aggregate"]:
+                st.subheader("Summary Statistics")
+                col1, col2, col3 = st.columns(3)
 
-            with col2:
-                # Wind rose / direction scatter
-                fig_dir = px.scatter(
-                    obs_df.sort_values("observed_at"),
-                    x="observed_at",
-                    y="wind_direction_deg",
-                    color="source",
-                    labels={"wind_direction_deg": "Wind Direction (°)", "observed_at": "Time"},
-                )
-                st.plotly_chart(fig_dir, width="stretch")
+                with col1:
+                    if "temperature_c_mean" in display_df.columns:
+                        avg_temp = display_df["temperature_c_mean"].mean()
+                        min_temp = display_df["temperature_c_min"].min()
+                        max_temp = display_df["temperature_c_max"].max()
+                        st.metric("Avg Temperature", f"{avg_temp:.1f}°C")
+                        st.caption(f"Range: {min_temp:.1f}°C to {max_temp:.1f}°C")
+
+                with col2:
+                    if "humidity_pct_mean" in display_df.columns:
+                        avg_hum = display_df["humidity_pct_mean"].mean()
+                        st.metric("Avg Humidity", f"{avg_hum:.0f}%")
+
+                with col3:
+                    if "observation_count" in display_df.columns:
+                        total_obs = display_df["observation_count"].sum()
+                        st.metric("Total Observations", f"{int(total_obs):,}")
 
             # Raw data table
-            with st.expander("View Raw Data"):
-                st.dataframe(obs_df, width="stretch")
+            with st.expander("View Data"):
+                st.dataframe(display_df, width="stretch")
 
     with tab2:
         st.header("Weather Forecasts")
@@ -300,13 +434,22 @@ def main():
         if loc_df.empty:
             st.warning("No locations found.")
         else:
+            # Filter by source
+            loc_sources = loc_df["source"].unique().tolist()
+            selected_sources = st.multiselect(
+                "Filter by source",
+                options=loc_sources,
+                default=loc_sources,
+            )
+            filtered_loc_df = loc_df[loc_df["source"].isin(selected_sources)]
+
             # Map
-            st.subheader("Station Map")
-            st.map(loc_df, latitude="latitude", longitude="longitude")
+            st.subheader(f"Station Map ({len(filtered_loc_df)} locations)")
+            st.map(filtered_loc_df, latitude="latitude", longitude="longitude")
 
             # Table
             st.subheader("Location Details")
-            st.dataframe(loc_df, width="stretch")
+            st.dataframe(filtered_loc_df, width="stretch")
 
     with tab4:
         st.header("Collection Logs")
