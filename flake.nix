@@ -11,7 +11,6 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         python = pkgs.python311;
-        pythonPackages = python.pkgs;
       in
       {
         devShells.default = pkgs.mkShell {
@@ -19,69 +18,19 @@
             # Python interpreter
             python
 
-            # System dependencies
+            # System dependencies (required by Python packages)
             pkgs.sqlite
             pkgs.eccodes  # For cfgrib (GRIB2 file support)
+            pkgs.stdenv.cc.cc.lib  # libstdc++ for numpy/pandas
 
-            # Python development tools
-            pythonPackages.pip
-            pythonPackages.virtualenv
-            pythonPackages.setuptools
-            pythonPackages.wheel
-
-            # CLI and UI
-            pythonPackages.click
-            pythonPackages.rich
-
-            # Configuration
-            pythonPackages.pydantic
-            pythonPackages.pydantic-settings
-            pythonPackages.python-dotenv
-
-            # Data handling
-            pythonPackages.pandas
-            pythonPackages.numpy
-            pythonPackages.xarray
-
-            # Machine Learning
-            pythonPackages.scikit-learn
-            pythonPackages.lightgbm
-
-            # HTTP and API
-            pythonPackages.requests
-            pythonPackages.tenacity
-
-            # Database
-            pythonPackages.sqlalchemy
-            pythonPackages.alembic
-
-            # Geospatial
-            pythonPackages.pyproj
-
-            # Logging
-            pythonPackages.structlog
-
-            # Visualization
-            pythonPackages.matplotlib
-            # Note: plotly removed due to nix build issues - install via pip when needed
-
-            # Development dependencies
-            pythonPackages.pytest
-            pythonPackages.pytest-cov
-            pythonPackages.black
-            pythonPackages.ruff
-            pythonPackages.mypy
-            pythonPackages.ipython
-            pythonPackages.jupyter
-
-            # Additional useful tools
+            # Development tools
             pkgs.git
             pkgs.gh  # GitHub CLI
           ];
 
           shellHook = ''
             export HAAR_CONFIG="./config/haar.toml"
-            export PYTHONPATH="$PWD:$PYTHONPATH"
+            export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:$LD_LIBRARY_PATH"
 
             # Create data directories if they don't exist
             mkdir -p data/logs data/terrain data/cache
@@ -92,54 +41,32 @@
             echo ""
             echo "Python version: $(python --version)"
             echo "Working directory: $PWD"
-            echo "Config path: $HAAR_CONFIG"
             echo ""
-            echo "📦 Installing package in development mode..."
-            pip install -e . --quiet 2>/dev/null || echo "   Package will be installed on first use"
+
+            # Auto-create and activate venv if it doesn't exist
+            if [ ! -d ".venv" ]; then
+              echo "📦 Creating virtual environment..."
+              python -m venv .venv
+            fi
+
+            source .venv/bin/activate
+
+            # Install package if not already installed
+            if ! python -c "import haar" 2>/dev/null; then
+              echo "📦 Installing package in development mode..."
+              pip install -e ".[dev]" --quiet
+            fi
+
             echo ""
             echo "🚀 Ready to develop!"
             echo ""
             echo "Quick start:"
             echo "  haar --help           # Run the CLI"
+            echo "  haar dashboard        # Launch web dashboard"
             echo "  pytest                # Run tests"
-            echo "  python -m haar.cli    # Run directly"
             echo ""
             echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           '';
-        };
-
-        # Optional: Define the package itself
-        packages.default = pythonPackages.buildPythonPackage {
-          pname = "haar";
-          version = "0.1.0";
-          src = ./.;
-          format = "pyproject";
-
-          nativeBuildInputs = [
-            pythonPackages.setuptools
-            pythonPackages.wheel
-          ];
-
-          propagatedBuildInputs = [
-            pythonPackages.click
-            pythonPackages.rich
-            pythonPackages.pydantic
-            pythonPackages.pydantic-settings
-            pythonPackages.python-dotenv
-            pythonPackages.pandas
-            pythonPackages.numpy
-            pythonPackages.xarray
-            pythonPackages.scikit-learn
-            pythonPackages.lightgbm
-            pythonPackages.requests
-            pythonPackages.tenacity
-            pythonPackages.sqlalchemy
-            pythonPackages.alembic
-            pythonPackages.pyproj
-            pythonPackages.structlog
-            pythonPackages.matplotlib
-            # pythonPackages.plotly  # Removed - nix build issues
-          ];
         };
       }
     );
