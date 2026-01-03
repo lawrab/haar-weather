@@ -54,32 +54,32 @@ def decode_geohash(geohash: str) -> Tuple[float, float]:
 logger = logging.getLogger(__name__)
 
 
-# Known Met Office observation station geohashes (discovered via API)
+# Known Met Office observation station geohashes with area names (discovered via API)
 # These rarely change - last updated January 2026
-SCOTTISH_STATIONS = [
-    "gfnmmy",  # Aberdeen
-    "gfjuxq",  # Aberdeenshire
-    "gf517k",  # Argyll and Bute
-    "gcgsc8",  # Argyll and Bute
-    "gcu2pd",  # Dumfries and Galloway
-    "gctpub",  # Dumfries and Galloway
-    "gcvw5v",  # Edinburgh
-    "gf5yws",  # Highland
-    "gfh7qb",  # Highland
-    "gfjm2y",  # Highland
-    "gf7cps",  # Highland
-    "gfk82s",  # Highland
-    "gfkgdg",  # Highland
-    "gfsb5g",  # Highland
-    "gfm8k6",  # Moray
-    "gf4wr9",  # Na h-Eileanan Siar
-    "gf7e0j",  # Na h-Eileanan Siar
-    "gfmzqh",  # Orkney Islands
-    "gcuy0c",  # Renfrewshire
-    "gcykcv",  # Scottish Borders
-    "gfwfdu",  # Shetland Islands
-    "gfxnj5",  # Shetland Islands
-]
+SCOTTISH_STATIONS = {
+    "gfnmmy": "Aberdeen",
+    "gfjuxq": "Aberdeenshire (Aboyne)",
+    "gf517k": "Argyll and Bute (Tiree)",
+    "gcgsc8": "Argyll and Bute (Campbeltown)",
+    "gcu2pd": "Dumfries and Galloway (West Freugh)",
+    "gctpub": "Dumfries and Galloway (Eskdalemuir)",
+    "gcvw5v": "Edinburgh (Gogarbank)",
+    "gf5yws": "Highland (Skye)",
+    "gfh7qb": "Highland (Aviemore)",
+    "gfjm2y": "Highland (Tulloch Bridge)",
+    "gf7cps": "Highland (Stornoway)",
+    "gfk82s": "Highland (Loch Glascarnoch)",
+    "gfkgdg": "Highland (Altnaharra)",
+    "gfsb5g": "Highland (Wick)",
+    "gfm8k6": "Moray (Kinloss)",
+    "gf4wr9": "Na h-Eileanan Siar (Benbecula)",
+    "gf7e0j": "Na h-Eileanan Siar (Stornoway)",
+    "gfmzqh": "Orkney Islands (Kirkwall)",
+    "gcuy0c": "Renfrewshire (Glasgow)",
+    "gcykcv": "Scottish Borders (Charterhall)",
+    "gfwfdu": "Shetland Islands (Lerwick)",
+    "gfxnj5": "Shetland Islands (Baltasound)",
+}
 
 
 # Wind direction compass to degrees mapping
@@ -207,8 +207,9 @@ class MetOfficeObservationsCollector(BaseCollector):
             self.logger.debug(f"No observations returned for {geohash}")
             return 0
 
-        # Get station info from first observation or create minimal info
-        station_info = {"geohash": geohash, "area": "Unknown"}
+        # Get station info from our mapping
+        area = SCOTTISH_STATIONS.get(geohash, "Unknown")
+        station_info = {"geohash": geohash, "area": area}
 
         return self._parse_and_store_observations(observations_data, station_info)
 
@@ -220,7 +221,7 @@ class MetOfficeObservationsCollector(BaseCollector):
         Returns:
             List of station geohash strings
         """
-        return SCOTTISH_STATIONS
+        return list(SCOTTISH_STATIONS.keys())
 
     def _parse_and_store_observations(
         self, observations_data: List[Dict[str, Any]], station_info: Dict[str, Any]
