@@ -9,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from haar import __version__
-from haar.collectors import MetOfficeObservationsCollector, NetatmoCollector, OpenMeteoCollector
+from haar.collectors import ERA5Collector, MetOfficeObservationsCollector, NetatmoCollector, OpenMeteoCollector
 from haar.config import HaarConfig, get_config
 from haar.logging import get_logger, setup_logging
 from haar.storage import get_session, init_db, reset_db_connection
@@ -480,6 +480,59 @@ def collect_run(source: str, backfill: Optional[int]) -> None:
     except Exception as e:
         logger.error(f"Collection failed: {e}", exc_info=True)
         console.print(f"\n[bold red]✗ Collection failed:[/bold red] {e}")
+        sys.exit(1)
+
+
+@collect.command("historical")
+@click.option("--start", help="Start date (YYYY-MM-DD)")
+@click.option("--end", help="End date (YYYY-MM-DD, default: 5 days ago)")
+@click.option("--days", type=int, default=30, help="Number of days to collect (default: 30)")
+def collect_historical(start: str, end: Optional[str], days: Optional[int]) -> None:
+    """Collect historical weather data from ERA5 reanalysis.
+
+    ERA5 provides consistent historical weather data from 1940 to present
+    (with a 5-day delay). Useful for ML model training.
+
+    Examples:
+
+    \b
+    haar collect historical --start 2024-01-01 --end 2024-12-31
+    haar collect historical --days 365
+    """
+    from datetime import datetime, timedelta
+
+    logger = get_logger(__name__)
+    console.print("[bold cyan]Collecting historical ERA5 data...[/bold cyan]")
+
+    try:
+        # Parse dates
+        if start:
+            start_date = datetime.strptime(start, "%Y-%m-%d")
+            if end:
+                end_date = datetime.strptime(end, "%Y-%m-%d")
+            else:
+                end_date = datetime.utcnow() - timedelta(days=5)
+        else:
+            # Use --days option (default 30)
+            end_date = datetime.utcnow() - timedelta(days=5)  # ERA5 has 5-day delay
+            start_date = end_date - timedelta(days=days)
+
+        console.print(f"  Date range: {start_date.date()} to {end_date.date()}")
+        total_days = (end_date - start_date).days
+        console.print(f"  Total days: {total_days}")
+
+        with ERA5Collector(start_date=start_date, end_date=end_date) as collector:
+            count = collector.collect()
+
+        console.print(f"\n[green]✓[/green] Collected {count} historical observations")
+
+    except ValueError as e:
+        console.print(f"[red]✗ Invalid date format:[/red] {e}")
+        console.print("[dim]Use YYYY-MM-DD format (e.g., 2024-01-01)[/dim]")
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Historical collection failed: {e}", exc_info=True)
+        console.print(f"[red]✗ Collection failed:[/red] {e}")
         sys.exit(1)
 
 
