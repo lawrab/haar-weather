@@ -1,0 +1,101 @@
+# Haar Weather - Docker Compose
+#
+# Usage with Synology Task Scheduler:
+#   1. Build the image: docker-compose build
+#   2. Create scheduled tasks in Synology DSM:
+#      - Control Panel > Task Scheduler > Create > Scheduled Task > User-defined script
+#
+# Example scheduled commands:
+#   Every 1 hour:  docker-compose run --rm collect-realtime
+#   Every 6 hours: docker-compose run --rm collect-forecast
+#   Daily at 2am:  docker-compose run --rm collect-historical
+#
+# Or run all collectors at once:
+#   docker-compose run --rm collect-all
+
+services:
+  # Base service - not run directly
+  haar:
+    build: .
+    image: haar-weather:latest
+    env_file:
+      - .env
+    volumes:
+      - haar-data:/app/data
+      - ./config:/app/config:ro
+
+  # Collect real-time observations (Met Office + Netatmo)
+  # Recommended: Every 1-2 hours
+  collect-realtime:
+    extends:
+      service: haar
+    command: ["collect", "run", "--source", "metoffice"]
+    profiles:
+      - collectors
+
+  collect-netatmo:
+    extends:
+      service: haar
+    command: ["collect", "run", "--source", "netatmo"]
+    profiles:
+      - collectors
+
+  # Collect forecasts (Open-Meteo)
+  # Recommended: Every 6 hours
+  collect-forecast:
+    extends:
+      service: haar
+    command: ["collect", "run", "--source", "openmeteo"]
+    profiles:
+      - collectors
+
+  # Collect historical data (ERA5)
+  # Recommended: Daily (has 5-day delay)
+  collect-historical:
+    extends:
+      service: haar
+    command: ["collect", "historical", "--days", "7"]
+    profiles:
+      - collectors
+
+  # Collect all sources at once
+  collect-all:
+    extends:
+      service: haar
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        python -m haar.cli collect run --source metoffice &&
+        python -m haar.cli collect run --source netatmo &&
+        python -m haar.cli collect run --source openmeteo
+    profiles:
+      - collectors
+
+  # Database management
+  db-stats:
+    extends:
+      service: haar
+    command: ["db", "stats"]
+    profiles:
+      - utilities
+
+  db-vacuum:
+    extends:
+      service: haar
+    command: ["db", "vacuum"]
+    profiles:
+      - utilities
+
+  # Dashboard (optional - for local viewing)
+  dashboard:
+    extends:
+      service: haar
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "8501"]
+    ports:
+      - "8501:8501"
+    profiles:
+      - dashboard
+
+volumes:
+  haar-data:
+    name: haar-weather-data
